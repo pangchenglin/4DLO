@@ -1,0 +1,27 @@
+<launch>
+
+    <arg name="rviz" default="true" />
+
+    <node name="benchmark_publisher" pkg="benchmark_publisher" type="benchmark_publisher" output="screen">
+        <param name="data_name" type="string" value="/home/pclin/WorkSpace/CT-RTS/src/benchmark_publisher/config/KITTI_05/data.csv" />
+        <param name="ct_data" type="string" value="/home/pclin/WorkSpace/CT-RTS/src/benchmark_publisher/config/KITTI_05/05_8.csv" />
+        <param name="kiss_data" type="string" value="/home/pclin/WorkSpace/CT-RTS/src/benchmark_publisher/config/KITTI_05/05_12.csv" />
+        <!-- <param name="mulls_data" type="string" value="/home/pclin/WorkSpace/CT-RTS/src/benchmark_publisher/config/KITTI_00/mulls.csv" />
+        <param name="voxel_data" type="string" value="/home/pclin/WorkSpace/CT-RTS/src/benchmark_publisher/config/KITTI_00/voxel-map.csv" /> -->
+
+        <remap from="~estimated_odometry" to="/aft_mapped_to_init" />
+    </node>   
+
+	<rosparam command="load" file="$(find ct_ekf)/config/kitti.yaml"/>
+
+	<node pkg="ct_ekf" type="IERTS" name="IERTS" />
+
+  
+
+
+    <group if="$(arg rviz)">
+	<node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find ct_ekf)/config/avea.rviz"/>
+    </group>
+
+
+</launch>

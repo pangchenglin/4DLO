@@ -1,0 +1,33 @@
+common:
+  lid_topic: "/aeva_points"
+  lid_type: 1
+  save_result: false
+  output_path: "/home/pclin/WorkSpace/S-RTS_aeva/src/CT-RTS/output/aeva_1/voxel_07.txt"
+  time_path: "/home/pclin/WorkSpace/S-RTS_aeva/src/CT-RTS/output/time/time.txt"
+  use_doppler: true
+
+mapping:
+  leaf_size: 0.5
+  range_threshold: 150
+  max_iteration: 50
+  voxel_size: 3
+  max_layer: 4
+  point_filter_num: 4
+  layer_point_size: [5, 5, 5, 5, 5]
+  plannar_threshold: 0.01
+  max_points_size: 1000
+  max_cov_points_size: 1000
+  cut_lidar_num: 10
+
+noise_model:
+  range_cov: 0.04
+  angle_cov: 0.1
+  acc_cov_scale: 1.0
+  gyr_cov_scale: 0.5
+
+visualization:
+  dense_map_enable: false
+  pub_point_cloud_skip: 1
+
+extrinsic_T_v_l:
+  [1.419999957084655762e+00, 2.399999946355819702e-01, 1.370000004768371582e+00]
