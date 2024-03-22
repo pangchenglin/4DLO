@@ -15,8 +15,6 @@
 #include <tf/transform_datatypes.h>
 #include <tf2_msgs/TFMessage.h>
 #include "omp.h"
-#include <tbb/blocked_range.h>
-#include <tbb/parallel_for.h>
 #include <string>
 #include <algorithm>
 #include <unordered_map>

@@ -13,8 +13,7 @@
 #include <visualization_msgs/Marker.h>
 #include <visualization_msgs/MarkerArray.h>
 #include <mutex>
-// #include "nanoflann.hpp"
-// #include "KDTreeVectorOfVectorsAdaptor.h"
+
 #define HASH_P 116101
 #define MAX_N 10000000000
 using namespace std;
