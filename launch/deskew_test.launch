@@ -1,0 +1,13 @@
+<launch>
+
+    <arg name="rviz" default="true" />
+	<rosparam command="load" file="$(find 4dlo)/config/aeva_04.yaml"/>
+
+	<node pkg="4dlo" type="deskew_test" name="deskew_test" output="screen" />
+
+    <group if="$(arg rviz)">
+	<node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find 4dlo)/config/deskew.rviz"/>
+    </group>
+
+
+</launch>

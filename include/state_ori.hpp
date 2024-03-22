@@ -14,8 +14,8 @@ struct StatesGroup{
         this->bias_g = Eigen::Vector3d::Zero();
         this->cov = Eigen::Matrix<double,DIM_STATE,DIM_STATE>::Identity() * INIT_COV;
         this->F_x = Eigen::Matrix<double,DIM_STATE,DIM_STATE>::Zero();
+        this->timestamp = 0;
     }
-
 
   StatesGroup(const StatesGroup &b) {
     this->rot = b.rot;
@@ -25,6 +25,7 @@ struct StatesGroup{
     this->bias_g = b.bias_g;
     this->cov = b.cov;
     this->F_x = b.F_x;
+    this->timestamp = b.timestamp;
   };
 
   StatesGroup &operator=(const StatesGroup &b) {
@@ -35,6 +36,7 @@ struct StatesGroup{
     this->bias_a = b.bias_a;
     this->bias_g = b.bias_g;
     this->F_x = b.F_x;
+    this->timestamp = b.timestamp;
     return *this;
   };
 
@@ -74,8 +76,10 @@ struct StatesGroup{
     this->rot = Eigen::Matrix3d::Identity();
     this->pos = Eigen::Vector3d::Zero();
     this->vel = Eigen::Vector3d::Zero();
+    this->timestamp = 0;
     }
 
+    double timestamp;
     Eigen::Matrix3d rot;
     Eigen::Vector3d pos;
     Eigen::Vector3d vel;
@@ -102,12 +106,15 @@ public:
     // void point_by_point_propag(const RTVPointCloud::Ptr &meas,const double &timestamp,std::vector<StatesGroup> &PoseVector );
     StatesGroup one_point_propag(const double timestamp,const StatesGroup &state_input,std::vector<pointWithCov> pv_list);
 
+    StatesGroup pv_propag(const double timestamp, const StatesGroup &state_input,std::vector<pointWithCov> pv_list);
+
     V3D cov_acc;
     V3D cov_gyr;
     V3D cov_acc_scale;
     V3D cov_gyr_scale;
-private:
+    V3D trans_v_l;
 
+  private:
     bool b_first_frame = true;
     double time_last_scan;
 };
@@ -140,8 +147,8 @@ StatesGroup State_Process::one_point_propag(const double timestamp,const StatesG
     double dt = timestamp + pv_list.back().time - time_last_scan;
     // double dt = pv_list.back().time - time_last_scan;
 
-    cout<<"delta_t:"<<pv_list.back().time<<endl;
-    cout<<"dt:"<<dt<<";pv_list:"<<pv_list.size()<<endl;
+    // cout<<"delta_t:"<<pv_list.back().time<<endl;
+    // cout<<"dt:"<<dt<<";pv_list:"<<pv_list.size()<<endl;
     MD(DIM_STATE,DIM_STATE) F_x,  cov_w;
     StatesGroup state_output = state_input;
     M3D Exp_f = Exp(state_input.bias_g,dt);
@@ -160,24 +167,61 @@ StatesGroup State_Process::one_point_propag(const double timestamp,const StatesG
     state_output.rot = state_input.rot * Exp_f;
     state_output.pos = state_input.pos + state_input.vel * dt; 
 
-    for(int i = 0; i < pv_list.size();i++){
-      double t_time = pv_list[i].time + timestamp - time_last_scan;
-      // double t_time = pv_list[i].time - time_last_scan;
+    // for(int i = 0; i < pv_list.size();i++){
+    //   double t_time = pv_list[i].time + timestamp - time_last_scan;
+    //   // double t_time = pv_list[i].time - time_last_scan;
 
-      M3D R_i(state_input.rot * Exp(state_input.bias_g, t_time)); //点所在时刻的旋转
-      V3D P_i = pv_list[i].point; //(it_pcl->x, it_pcl->y, it_pcl->z);                                   //点所在时刻的位置(雷达坐标系下)
-      V3D T_ei(state_input.pos + state_input.vel * t_time + 0.5 * state_input.bias_a * t_time * t_time - state_output.pos); //从点所在的世界位置-雷达末尾世界位置
-      V3D P_compensate =  state_output.rot.conjugate() * (R_i * P_i + T_ei) ; // not accurate!
-      pv_list[i].point = P_compensate;
-    }
+    //   M3D R_i(state_input.rot * Exp(state_input.bias_g, t_time)); //点所在时刻的旋转
+    //   V3D P_i = pv_list[i].point; //(it_pcl->x, it_pcl->y, it_pcl->z);                                   //点所在时刻的位置(雷达坐标系下)
+    //   V3D T_ei(state_input.pos + state_input.vel * t_time + 0.5 * state_input.bias_a * t_time * t_time - state_output.pos); //从点所在的世界位置-雷达末尾世界位置
+    //   V3D P_compensate =  state_output.rot.conjugate() * (R_i * P_i + T_ei) ; // not accurate!
+    //   pv_list[i].point = P_compensate;
+    // }
 
 
     // time_last_scan = pv_list.back().time;
 
     time_last_scan = timestamp + pv_list.back().time;
+    state_output.timestamp = time_last_scan;
+    return state_output;
+}
+
+
+StatesGroup State_Process::pv_propag(const double timestamp,const StatesGroup &state_input,std::vector<pointWithCov> pv_list){
+    cov_acc = Eye3d * cov_acc_scale;
+    cov_gyr = Eye3d * cov_gyr_scale;
+    
+    StatesGroup state_output = state_input;
+
+    for (int i = 0; i < pv_list.size(); i++)
+    {
+      double dt = timestamp + pv_list[i].time - time_last_scan;
+      MD(DIM_STATE,DIM_STATE) F_x,  cov_w;
+      M3D Exp_f = Exp(pv_list[i].gyr,dt);
+
+      F_x.setIdentity();
+      cov_w.setZero();
+      
+      F_x.block<3, 3>(0, 0) = Exp(pv_list[i].gyr, -dt);
+      F_x.block<3, 3>(0, 9) = Eye3d * dt;
+      F_x.block<3, 3>(3, 6) = Eye3d * dt;
+      cov_w.block<3, 3>(9, 9).diagonal() = cov_gyr * dt * dt; // for omega in constant model
+      cov_w.block<3, 3>(6, 6).diagonal() = cov_acc * dt * dt; // for velocity in constant model
+
+      state_output.F_x = F_x;
+      state_output.cov = F_x * state_output.cov * F_x.transpose() + cov_w;
+      state_output.rot = state_output.rot * Exp_f;
+      state_output.pos = state_output.pos + state_output.rot* pv_list[i].vel * dt; 
+      state_output.timestamp = time_last_scan;
+
+      time_last_scan = timestamp + pv_list[i].time;
+
+    }
 
     return state_output;
 }
+
+
 
 State_Process::~State_Process(){}
 

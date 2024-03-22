@@ -37,16 +37,9 @@ using namespace std;
 using namespace Eigen;
 
 string lidar_topic;
-bool kitti_en = false;
-enum LID_TYPE
-{
-    AEVA = 1,
 
-};
-int lidar_type;
 double leaf_size = 0.2;
 bool save_result = false;
-bool use_doppler = false;
 double range_threshold = 100;
 double range_cov = 0.02;
 double angle_cov = 0.05;
@@ -65,7 +58,6 @@ vector<double> layer_point_size;
 int cut_lidar_num = 6;
 bool flg_EKF_converged, init_map = false, EKF_stop_flag = 0, flg_EKF_inited = 0;
 bool dense_map_enable;
-bool use_RTS;
 int pub_point_cloud_skip;
 std::unordered_map<VOXEL_LOC, OctoTree *> voxel_map;
 geometry_msgs::Quaternion geoQuat;
@@ -80,14 +72,13 @@ double search_time = 0;
 
 double map_incremental_time, kdtree_search_time, total_time, scan_match_time,
     solve_time;
-int start_frame, end_frame;
 int iterCount, frameCount = 0;
 VD(DIM_STATE)
 solution;
 MD(DIM_STATE, DIM_STATE)
 G, H_T_H, I_STATE;
 V3D rot_add, t_add, v_add;
-StatesGroup state_propagat;
+StatesGroup state_propagat, last_state, lastlast_state;
 double deltaT, deltaR, aver_time_consu = 0;
 V3D euler_cur;
 V3D position_last(Zero3d);
@@ -98,7 +89,6 @@ std_msgs::Header first_header;
 std_msgs::Header current_header;
 std::vector<std::vector<pointWithCov>> PointCloudVector;
 std::string DATASET_PATH, OUTPUT_PATH, time_consu_root;
-std::vector<double> times;
 
 void sub_sample(RTVPointCloud::Ptr &input_points, double size_voxel, double range)
 {
@@ -135,7 +125,7 @@ void sub_sample(RTVPointCloud::Ptr &input_points, double size_voxel, double rang
 
 StatesGroup state;
 std::vector<StatesGroup> state_list;
-std::vector<StatesGroup> predict_list;
+// std::vector<StatesGroup> predict_list;
 RTVPointCloud::Ptr normvec(new RTVPointCloud(100000, 1));
 RTVPointCloud::Ptr laserCloudOri(new RTVPointCloud(100000, 1));
 RTVPointCloud::Ptr laserCloudNoeffect(new RTVPointCloud(100000, 1));
@@ -193,28 +183,25 @@ void transformLidar(const StatesGroup &state, const RTVPointCloud::Ptr &input_cl
     }
 }
 
-void motionCompensate(std::vector<std::vector<pointWithCov>> &pointvector)
+void motionCompensate( std::vector<pointWithCov> &point_raw )
 {
-    for (int i = 0; i < pointvector.size(); i++)
+    double t_end = point_raw.back().time;
+    for (int i = 0; i < point_raw.size(); i++)
     {
-        double t_end = pointvector[i].back().time;
-        for (int j = 0; j < pointvector[i].size(); j++)
-        {
-            double doppler_speed = pointvector[i][j].radial_vel;
-            Eigen::Vector3d point3d = pointvector[i][j].point;
+            double doppler_speed = point_raw[i].radial_vel;
+            Eigen::Vector3d point3d = point_raw[i].point;
             double normal = std::sqrt(point3d.transpose() * point3d);
-            Eigen::Vector3d velocity = -(doppler_speed * point3d) / normal;
-
-            pointvector[i][j].vel = velocity;
-            double tan_alpha = point3d.y() / point3d.x() / ext.x();
-            double tan_beta = point3d.z() / point3d.x() / ext.z();
-            Eigen::Vector3d gyr = Eigen::Vector3d(0, velocity.z() * tan_beta, velocity.y() * tan_alpha);
-            pointvector[i][j].gyr = gyr;
-            double delta_time = t_end - pointvector[i][j].time;
-            Eigen::Vector3d aft_point = Exp(gyr, delta_time) * point3d + velocity * delta_time;
-            pointvector[i][j].point = aft_point;
-        }
+            Eigen::Vector3d linear_vel = (doppler_speed * point3d) / normal;
+            point_raw[i].vel = linear_vel;
+            double w_z = linear_vel.y() / ext.x() * 0.01;
+            double w_y = linear_vel.z() / ext.z() * 0.01;
+            Eigen::Vector3d angular_vel = Eigen::Vector3d(0, w_y, -w_z);
+            point_raw[i].gyr = angular_vel;
+            double delta_time = t_end - point_raw[i].time;
+            Eigen::Vector3d aft_point = Exp(angular_vel, delta_time) * point3d + linear_vel * delta_time;
+            point_raw[i].point = aft_point;
     }
+    
 }
 
 void cutLidarFrame(const RTVPointCloud::Ptr &input_cloud)
@@ -248,18 +235,16 @@ void cutLidarFrame(const RTVPointCloud::Ptr &input_cloud)
     }
 }
 
-void doppler_weight()
+void pclCallBack(const sensor_msgs::PointCloud2::ConstPtr &msg)
 {
-}
+    current_header = msg->header;
+    RTVPointCloud::Ptr ptr(new RTVPointCloud());
 
-void Run(RTVPointCloud::Ptr ptr)
-{
-    cout << "raw_points.size()" << ptr->points.size() << endl;
-    // auto undistort_start = std::chrono::high_resolution_clock::now();
+    pcl::fromROSMsg(*msg, *ptr);
+
     auto t_downsample_start = std::chrono::high_resolution_clock::now();
     sub_sample(ptr, leaf_size, range_threshold);
 
-    RTVPointCloud::Ptr undistort_cloud(new RTVPointCloud());
     RTVPointCloud::Ptr raw_cloud(new RTVPointCloud());
 
     int i = 0;
@@ -273,7 +258,7 @@ void Run(RTVPointCloud::Ptr ptr)
         }
         i++;
     }
-    cout << "down_sample.size():" << raw_cloud->size() << endl;
+    // cout << "down_sample.size():" << raw_cloud->size() << endl;
     sort(raw_cloud->points.begin(), raw_cloud->points.end(), time_list);
 
     // auto undistort_end = std::chrono::high_resolution_clock::now();
@@ -312,7 +297,7 @@ void Run(RTVPointCloud::Ptr ptr)
             pv.cov = cov;
             pv_list.push_back(pv);
         }
-
+        last_state = state;
         buildVoxelMap(pv_list, voxel_size, max_layer, layer_size, max_points_size,
                       max_points_size, min_eigen_value, voxel_map);
         init_map = true;
@@ -325,34 +310,26 @@ void Run(RTVPointCloud::Ptr ptr)
     cout << "frame count:" << frameCount << endl;
 
     // auto t_downsample_start = std::chrono::high_resolution_clock::now();
-    // sub_sample(undistort_cloud,leaf_size,range_threshold);
     // auto t_downsample_end = std::chrono::high_resolution_clock::now();
     // auto t_downsample = std::chrono::duration_cast<std::chrono::duration<double>>(t_downsample_end - t_downsample_start).count() * 1000;
     auto t_solve_eskf_start = std::chrono::high_resolution_clock::now();
 
-    // V3D v_body;
-    // M3D p_v_r;
-    // std::vector<uint> inlier_idx_best;
-    // solve3DLsqRansac(raw_cloud,v_body,p_v_r,inlier_idx_best);
-    // cout<<"inlier_idx_best size:"<<inlier_idx_best.size()<<endl;
-    // cout<<"v_body:"<<state.rot.inverse() * state.vel <<"; v_body_lidar:"<<v_body<<endl;
-    // cut_lidar_frame
     scan_match_time = 0.0;
 
     cutLidarFrame(raw_cloud);
-    // motionCompensate(PointCloudVector);
     state_list.clear();
-    predict_list.clear();
-    // std::vector<StatesGroup>().swap(state_list);
-    // todo
+    // predict_list.clear();
+
     for (int i = 0; i < cut_lidar_num; i++)
     {
-        LOG(INFO) << "cut_lidar_num:" << i << endl;
+        motionCompensate(PointCloudVector[i]);
+
         auto pv_list = PointCloudVector[i];
         double timestamp = current_header.stamp.toSec();
         //   double timestamp = pv_list[0].time;
 
         auto state_update = process_iekf->one_point_propag(timestamp, state, pv_list);
+        // auto state_update = process_iekf->pv_propag(timestamp, state, pv_list);
         bool nearest_search_en = true;
         double total_residual;
         int rematch_num = 0;
@@ -377,7 +354,7 @@ void Run(RTVPointCloud::Ptr ptr)
             body_var.push_back(cov);
         }
         state_propagat = state_update;
-        predict_list.push_back(state_propagat);
+        // predict_list.push_back(state_propagat);
         for (iterCount = 0; iterCount < NUM_MAX_ITERATIONS; iterCount++)
         {
             laserCloudOri->clear();
@@ -474,20 +451,24 @@ void Run(RTVPointCloud::Ptr ptr)
                 J_nq.block<1, 3>(0, 0) = point_world - ptpl_list[j].center;
                 J_nq.block<1, 3>(0, 3) = -ptpl_list[j].normal;
                 double sigma_l = J_nq * ptpl_list[j].plane_cov * J_nq.transpose();
+                // if(frame_count)
+                //doppler weight
+                double sigma_doppler = 0;
+                if (frameCount > 3)
+                {
+                    V3D v_ref = lastlast_state.rot.inverse() * (last_state.pos - lastlast_state.pos) / (last_state.timestamp - lastlast_state.timestamp);
 
-                double denominator = sqrt(point_this.transpose() * point_this);
-                V3D point_norm = point_this / denominator;
-                V3D vel_body = -state_update.rot.inverse() * state_update.vel;
-                double esti_doppler = point_norm.transpose() * vel_body;
-                double error = laser_p.velocity - esti_doppler;
-                double sigma_velo = 1 / (1 + error * error);
+                    double denominator = sqrt(point_this.transpose() * point_this);
+                    V3D point_norm = point_this / denominator;
+                //     // V3D vel_body = -state_update.rot.inverse() * v_ref;
+                    double esti_doppler = point_norm.transpose() * v_ref;
+                    double error = laser_p.velocity - esti_doppler;
+                    sigma_doppler = 1 / (1 + error * error);
+                }
 
-                R_inv(j) = 1 / (sigma_velo * sigma_l + norm_vec.transpose() * cov * norm_vec);
+                R_inv(j) = 1 / (sigma_doppler + sigma_l + norm_vec.transpose() * cov * norm_vec);
                 /*** calculate the Measuremnt Jacobian matrix H ***/
-                /**点到平面残差*/
 
-                // V3D C(state_update.rot.conjugate().normalized()*norm_vec);
-                // V3D A(point_crossmat * C);
                 V3D A(point_crossmat * state_update.rot.transpose() * norm_vec);
 
                 Hsub.block<1, 6>(j, 0) << VEC_FROM_ARRAY(A), norm_p.x, norm_p.y, norm_p.z;
@@ -497,19 +478,6 @@ void Run(RTVPointCloud::Ptr ptr)
                     norm_p.z * R_inv(j);
                 meas_vec(j) = -norm_p.intensity;
 
-                // if (use_doppler && (std::abs(error) < 0.4))
-                // {
-                //     M3D skew_vel_body;
-                //     V3D RTv = state.rot.inverse() * state.vel;
-                //     skew_vel_body << SKEW_SYM_MATRX(RTv);
-                //     V3D dr_dR = -point_norm.transpose() * skew_vel_body;
-                //     V3D dr_dv = -point_norm.transpose() * state.rot.inverse();
-                //     Hsub.block<1, 3>(j + effect_feat_num, 0) << VEC_FROM_ARRAY(dr_dR);
-                //     Hsub.block<1, 3>(j + effect_feat_num, 6) << VEC_FROM_ARRAY(dr_dv);
-                //     Hsub_T_R_inv.block<3, 1>(0, j + effect_feat_num) << dr_dR[0], dr_dR[1], dr_dR[2];
-                //     Hsub_T_R_inv.block<3, 1>(6, j + effect_feat_num) << dr_dv[0], dr_dv[1], dr_dv[2];
-                //     meas_vec(j + effect_feat_num) = error;
-                // }
             }
             MatrixXd K(DIM_STATE, effect_feat_num * 2);
             // LOG(INFO)<<"effect_feat_num:"<<effect_feat_num<<endl;
@@ -599,6 +567,8 @@ void Run(RTVPointCloud::Ptr ptr)
                 break;
         }
         state = state_update;
+        lastlast_state = last_state;
+        last_state = state;
         state_list.push_back(state_update);
     }
     auto t_solve_eskf_end = std::chrono::high_resolution_clock::now();
@@ -607,10 +577,8 @@ void Run(RTVPointCloud::Ptr ptr)
     auto map_incremental_start = std::chrono::high_resolution_clock::now();
 
     RTVPointCloud::Ptr world_lidar(new RTVPointCloud());
-    // transformLidar(state,undistort_cloud,world_lidar);
     world_lidar->clear();
     std::vector<pointWithCov> pv_list_add;
-    // todo
 
     for (size_t i = 0; i < cut_lidar_num; i++)
     {
@@ -647,8 +615,6 @@ void Run(RTVPointCloud::Ptr ptr)
 
     std::sort(pv_list_add.begin(), pv_list_add.end(), var_contrast);
     updateVoxelMap(pv_list_add, voxel_size, max_layer, layer_size, max_points_size, max_points_size, min_eigen_value, voxel_map);
-    Eigen::Vector3d location = state_list.back().pos;
-    // mapRemove(location,150,voxel_map);
     state = state_list.back();
     euler_cur = RotMtoEuler(state.rot);
     geoQuat = tf::createQuaternionMsgFromRollPitchYaw(euler_cur(0), euler_cur(1), euler_cur(2));
@@ -678,9 +644,7 @@ void Run(RTVPointCloud::Ptr ptr)
     odomAftMapped.pose.pose.orientation.y = geoQuat.y;
     odomAftMapped.pose.pose.orientation.z = geoQuat.z;
     odomAftMapped.pose.pose.orientation.w = geoQuat.w;
-    // if (save_result) {
-    //     kitti_log(fp_kitti);
-    // }
+
     if (save_result)
     {
         ofstream foutC(OUTPUT_PATH, ios::app);
@@ -725,16 +689,10 @@ void Run(RTVPointCloud::Ptr ptr)
         pubLaserCloudFullRes.publish(pub_cloud);
     }
 
-    // undistort_time_mean = undistort_time_mean * (frameCount - 1) / frameCount +
-    //                     (undistort_time) / frameCount;
     down_sample_time_mean =
         down_sample_time_mean * (frameCount - 1) / frameCount +
         (t_downsample) / frameCount;
-    // calc_cov_time_mean = calc_cov_time_mean * (frameCount - 1) / frameCount +
-    //                     (calc_point_cov_time) / frameCount;
-    // scan_match_time_mean =
-    //     scan_match_time_mean * (frameCount - 1) / frameCount +
-    //     (scan_match_time) / frameCount;
+
     ekf_solve_time_mean = ekf_solve_time_mean * (frameCount - 1) / frameCount +
                           (solve_time) / frameCount;
     map_update_time_mean =
@@ -744,14 +702,9 @@ void Run(RTVPointCloud::Ptr ptr)
     aver_time_consu = aver_time_consu * (frameCount - 1) / frameCount +
                       (total_time) / frameCount;
 
-    // cout << "[ Time ]: "
-    //     << "average undistort: " << undistort_time_mean <<"ms"<< std::endl;
+
     cout << "[ Time ]: "
          << "average down sample: " << down_sample_time_mean << "ms" << std::endl;
-    // cout << "[ Time ]: "
-    //     << "average calc cov: " << calc_cov_time_mean <<"ms"<< std::endl;
-    // cout << "[ Time ]: "
-    //     << "average scan match: " << scan_match_time_mean <<"ms"<< std::endl;
     cout << "[ Time ]: "
          << "average solve: " << ekf_solve_time_mean << "ms" << std::endl;
     cout << "[ Time ]: "
@@ -760,35 +713,15 @@ void Run(RTVPointCloud::Ptr ptr)
          << " average total " << aver_time_consu << "ms" << endl;
 }
 
-void pclCallBack(const sensor_msgs::PointCloud2::ConstPtr &msg)
-{
-    LOG(INFO) << lidar_topic;
-    current_header = msg->header;
-
-    RTVPointCloud::Ptr ptr(new RTVPointCloud());
-    if (lidar_type == AEVA)
-    {
-        pcl::fromROSMsg(*msg, *ptr);
-    }
-
-    Run(ptr);
-}
-
 int main(int argc, char **argv)
 {
-    ros::init(argc, argv, "4D_LO");
+    ros::init(argc, argv, "4dlo");
     ros::NodeHandle nh;
-    nh.param<bool>("common/kitti_en", kitti_en, false);
     nh.param<string>("common/lid_topic", lidar_topic, "/lidar_topic");
-    nh.param<int>("common/lid_type", lidar_type, AEVA);
     nh.param<string>("common/input_path", DATASET_PATH, "/");
     nh.param<string>("common/output_path", OUTPUT_PATH, "/");
     nh.param<string>("common/time_path", time_consu_root, "/");
     nh.param<bool>("common/save_result", save_result, false);
-    nh.param<bool>("common/use_doppler", use_doppler, false);
-    nh.param<int>("common/end_frame", end_frame, 20);
-    nh.param<int>("common/start_frame", start_frame, 0);
-    nh.param<bool>("common/use_RTS", use_RTS, false);
     nh.param<double>("mapping/leaf_size", leaf_size, 0.2);
     nh.param<int>("mapping/cut_lidar_num", cut_lidar_num, 1);
     nh.param<double>("mapping/range_threshold", range_threshold, 100);
@@ -834,11 +767,9 @@ int main(int argc, char **argv)
     H_T_H.setZero();
     I_STATE.setIdentity();
 
-    {
-        cout << "Using ROSBAG!!!" << lidar_topic << endl;
-        ROS_ASSERT_MSG(lidar_type <= 3 && lidar_type >= 1, "lidar type is error");
-        sub_pcl = nh.subscribe(lidar_topic, 2000, pclCallBack);
-    }
+    
+    sub_pcl = nh.subscribe(lidar_topic, 2000, pclCallBack);
+    
 
     ros::spin();
 
