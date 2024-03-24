@@ -1,7 +1,7 @@
 import csv
 import matplotlib.pyplot as plt
-path1 = "/home/pclin/WorkSpace/S-RTS_aeva/src/CT-RTS/output/time/time_our07.csv"
-path2 = "/home/pclin/WorkSpace/S-RTS_aeva/src/CT-RTS/output/time/time_voxel07.csv"
+path1 = "/home/pclin/CT-RTS/output/time/time_our07.csv"
+path2 = "/home/pclin/CT-RTS/output/time/time_voxel07.csv"
 
 data1 = []
 num1 = []
@@ -24,11 +24,11 @@ if __name__ == "__main__":
     num1,data1 = readpath(path1)
     num2,data2 = readpath(path2)
     # fig, ax = plt.subplots(figsize=(6, 6), layout='constrained')
-    plt.subplot(2, 1, 1)
+    # plt.subplot(2, 1, 1)
     plt.ylabel("Time(ms)")
 
     plt.plot(num1, data1, linewidth=0.3)
-    plt.subplot(2, 1, 2)
+    # plt.subplot(2, 1, 2)
     plt.plot(num2, data2, linewidth=0.3)
     plt.xlabel("Frame Number")
     plt.ylabel("Time(ms)")
